@@ -1,0 +1,37 @@
+services:
+  source_db:
+    image: postgres:15-alpine
+    
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB_S}
+      POSTGRES_USER: ${POSTGRES_USER_S}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD_S}
+
+    volumes:
+      - ./source_db_init/init.sql:docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5433:5432"
+
+  destination_db:
+    image: postgres:15-alpine
+
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB_D}
+      POSTGRES_USER: ${POSTGRES_USER_D}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD_D}
+
+    ports:
+      - "5434:5432"
+
+  elt_script:
+    build:
+      context: ./elt_script
+      dockerfile: Dockerfile
+    command: ["python", "elt_script.py"]
+    depends_on:
+      - source_db
+      - destination_db
+
+networks:
+  data_pipeline_network:
+    driver: bridge
