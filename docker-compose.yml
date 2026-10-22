@@ -1,37 +1,70 @@
 services:
   source_db:
     image: postgres:15-alpine
-    
     environment:
       POSTGRES_DB: ${POSTGRES_DB_S}
       POSTGRES_USER: ${POSTGRES_USER_S}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD_S}
-
     volumes:
-      - ./source_db_init/init.sql:docker-entrypoint-initdb.d/init.sql
+      - source_data:/var/lib/postgresql/data
+      - ./db_init/source_init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     ports:
       - "5433:5432"
+    networks:
+      - data_pipeline_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER_S} -d ${POSTGRES_DB_S}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   destination_db:
     image: postgres:15-alpine
-
     environment:
       POSTGRES_DB: ${POSTGRES_DB_D}
       POSTGRES_USER: ${POSTGRES_USER_D}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD_D}
-
+    volumes:
+      - destination_data:/var/lib/postgresql/data
+      - ./db_init/destination_init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     ports:
       - "5434:5432"
+    networks:
+      - data_pipeline_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER_D} -d ${POSTGRES_DB_D}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   elt_script:
     build:
-      context: ./elt_script
+      context: ./elt
       dockerfile: Dockerfile
     command: ["python", "elt_script.py"]
+    environment:
+      SOURCE_HOST: source_db
+      SOURCE_PORT: 5432
+      SOURCE_DB: ${POSTGRES_DB_S}
+      SOURCE_USER: ${POSTGRES_USER_S}
+      SOURCE_PASSWORD: ${POSTGRES_PASSWORD_S}
+      DEST_HOST: destination_db
+      DEST_PORT: 5432
+      DEST_DB: ${POSTGRES_DB_D}
+      DEST_USER: ${POSTGRES_USER_D}
+      DEST_PASSWORD: ${POSTGRES_PASSWORD_D}
+    networks:
+      - data_pipeline_network
     depends_on:
-      - source_db
-      - destination_db
+      source_db:
+        condition: service_healthy
+      destination_db:
+        condition: service_healthy
 
 networks:
   data_pipeline_network:
     driver: bridge
+
+volumes:
+  source_data:
+  destination_data:
