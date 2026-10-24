@@ -95,43 +95,57 @@ def transfer_table(
     dest_conn,
     table: str,
 ) -> int:
-    # Transfer rows in batches using a server-side cursor
+    table_identifier = sql.Identifier(table)
+
+    # Build source queries
     select_query = sql.SQL(
         "SELECT * FROM {}"
-    ).format(sql.Identifier(table))
+    ).format(table_identifier)
+
+    metadata_query = sql.SQL(
+        "SELECT * FROM {} LIMIT 0"
+    ).format(table_identifier)
+
+    # Get column metadata without loading table data
+    with src_conn.cursor() as metadata_cur:
+        metadata_cur.execute(metadata_query)
+
+        if metadata_cur.description is None:
+            raise RuntimeError(
+                f"Could not retrieve column metadata for table: {table}"
+            )
+
+        columns = [
+            desc[0]
+            for desc in metadata_cur.description
+        ]
+
+    # Build a safe INSERT statement
+    insert_query = sql.SQL(
+        "INSERT INTO {} ({}) VALUES %s"
+    ).format(
+        table_identifier,
+        sql.SQL(", ").join(
+            sql.Identifier(column)
+            for column in columns
+        ),
+    ).as_string(dest_conn)
 
     total_loaded = 0
 
+    # Stream source rows using a server-side cursor
     with src_conn.cursor(
         name=f"transfer_{table}"
     ) as src_cur:
         src_cur.itersize = BATCH_SIZE
         src_cur.execute(select_query)
 
-        # Read source column names
-        columns = [
-            desc[0] for desc in src_cur.description
-        ]
-
-        # Build a safe INSERT statement
-        insert_query = sql.SQL(
-            "INSERT INTO {} ({}) VALUES %s"
-        ).format(
-            sql.Identifier(table),
-            sql.SQL(", ").join(
-                sql.Identifier(column)
-                for column in columns
-            ),
-        ).as_string(dest_conn)
-
         while True:
-            # Fetch the next batch
             rows = src_cur.fetchmany(BATCH_SIZE)
 
             if not rows:
                 break
 
-            # Insert the current batch
             with dest_conn.cursor() as dest_cur:
                 execute_values(
                     dest_cur,
@@ -200,7 +214,7 @@ def main() -> int:
                         )
 
                         log.info(
-                            "[transfer] %s: loaded %s rows",
+                            "[transfer] %s: completed, total=%s rows",
                             table,
                             loaded,
                         )
